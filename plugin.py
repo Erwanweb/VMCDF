@@ -368,7 +368,7 @@ class BasePlugin:
             if self.debug:
                 Domoticz.Debug("--------------DEBUG : Device 5 ALL: valeurs manquantes -> 0;0;0")
 
-        # --- calculs pour logiaue
+        # --- calculs pour logique
 
         Td_ext = dew_point_celsius(T_ext, RH_ext) if (T_ext is not None and RH_ext is not None) else None
         Td_target = dew_point_celsius(T_int, RH_int) if (T_int is not None and RH_int is not None) else None
@@ -552,7 +552,7 @@ class BasePlugin:
 
         # 1) Lire l’état actuel du relais
         cur_state = None
-        dev = DomoticzAPI(f"type=devices&rid={self.relay_idx}")
+        dev = DomoticzAPI(f"type=command&param=getdevices&rid={self.relay_idx}")
         try:
             if dev and 'result' in dev and len(dev['result']) > 0:
                 d = dev['result'][0]
