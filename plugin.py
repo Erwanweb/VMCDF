@@ -606,7 +606,7 @@ class BasePlugin:
 
     # -------------- get_device_by_idx --------------
     def get_device_by_idx(self, idx):
-        res = DomoticzAPI(f"type=devices&rid={idx}")
+        res = DomoticzAPI(f"type=command&param=getdevices&rid={idx}")
         if res and 'result' in res and len(res['result']) > 0:
             return res['result'][0]
         Domoticz.Error(f"Device idx {idx} introuvable")
