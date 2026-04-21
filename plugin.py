@@ -26,14 +26,10 @@
         <param field="Mode5" label="Params(expert) : Timer(Mins),RH↓,RH↑,ΔTd-DRY,ΔTd-ON,ΔTd-OFF " width="400px" required="true" default="60,55,75,20,10,5"/>
         <param field="Mode6" label="Logging Level" width="200px">
             <options>
-                <option label="Normal" value="Normal"  default="true"/>
-                <option label="Verbose" value="Verbose"/>
+                <option label="Normal" value="0" default="true"/>
                 <option label="Debug - Python Only" value="2"/>
                 <option label="Debug - Basic" value="62"/>
-                <option label="Debug - Basic+Messages" value="126"/>
-                <option label="Debug - Connections Only" value="16"/>
-                <option label="Debug - Connections+Queue" value="144"/>
-                <option label="Debug - All" value="-1"/>
+                <option label="Debug - All" value="1"/>
             </options>
         </param>
     </params>
@@ -109,7 +105,6 @@ class BasePlugin:
             self.debug = True
             Domoticz.Debugging(debuglevel)
             DumpConfigToLog()
-            self.loglevel = "Verbose"
         else:
             self.debug = False
             Domoticz.Debugging(0)
