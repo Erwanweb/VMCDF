@@ -63,7 +63,7 @@ class deviceparam:
 class BasePlugin:
     def __init__(self):
         self.debug = False
-        self.loglevel = "Normal"
+        self.loglevel = 0
 
         now = datetime.now() # Time helper
 
