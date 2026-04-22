@@ -10,10 +10,11 @@
 # Version:    1.0.4: optim update devices ...
 
 
+
 """
-<plugin key="ZZ-VMCDF" name="RONELABS - VMC DF Control" author="ErwanBCN" version="1.0.2" externallink="https://ronelabs.com">
+<plugin key="ZZ-VMCDF" name="RONELABS - VMC DF Control" author="ErwanBCN" version="1.0.4" externallink="https://ronelabs.com">
     <description>
-        <h2>VMC DF Control V1.0.3</h2><br/>
+        <h2>VMC DF Control V1.0.4</h2><br/>
         Easily implement in Domoticz a VMC DF Inteliggent Control<br/>
         <h3>Set-up and Configuration</h3>
     </description>
@@ -21,7 +22,6 @@
         <param field="Username" label="Outdoor Temp/Hum sensors (CSV List of idx)" width="400px" required="true" default=""/>
         <param field="Password" label="Normal rooms Temp/Hum sensors (CSV List of idx)" width="400px" required="true" default=""/>
         <param field="Mode1" label="Wet rooms Temp/Hum sensors (CSV List of idx)" width="400px" required="true" default=""/>
-        <param field="Mode2" label="offsets Wet rooms Hum. sensors (same order, 0 if none)" width="400px" required="true" default=""/>
         <param field="Mode3" label="Boost relay (CSV List of idx)" width="50px" required="true" default=""/>
         <param field="Mode4" label="Presence sensors (CSV List of idx)" width="400px" required="false" default=""/>
         <param field="Mode5" label="Params(expert) : Timer(Mins),RH↓,RH↑,ΔTd-DRY,ΔTd-ON,ΔTd-OFF " width="400px" required="true" default="60,55,75,20,10,5"/>
@@ -71,7 +71,6 @@ class BasePlugin:
         self.outdoor_idxs = []
         self.indoor_idxs = []
         self.hum_idxs = []
-        self.hum_offsets = []
         self.relay_idx = None
         #self._last_td_gate = None
         self.Timer = 60
@@ -89,24 +88,20 @@ class BasePlugin:
             'avg_hum': None,
         }
 
-        # Paramètres internes
-        self._ext_offset = 2.0  # fallback HUMIDE : RH_ext + 2 %
-
-        # Optimisations anti-spam / cache
+        # OPTIM: cache des lectures API pendant un cycle refresh/heartbeat
         self._cycle_device_cache = {}
-        self._last_info_text = None
 
     # -------------- Life cycle --------------
 
     def _start_refresh_cycle(self):
         self._cycle_device_cache = {}
 
-    def updateDeviceIfChanged(self, Unit, nValue, sValue):
-        if Unit not in Devices:
+    def updateDeviceIfChanged(self, unit, nValue, sValue):
+        if unit not in Devices:
             return False
         sValue = str(sValue)
-        if Devices[Unit].nValue != nValue or Devices[Unit].sValue != sValue:
-            Devices[Unit].Update(nValue=nValue, sValue=sValue)
+        if Devices[unit].nValue != nValue or Devices[unit].sValue != sValue:
+            Devices[unit].Update(nValue=nValue, sValue=sValue)
             return True
         return False
 
@@ -130,7 +125,6 @@ class BasePlugin:
         self.outdoor_idxs = parseCSV_to_ints(Parameters.get("Username", ""))
         self.indoor_idxs = parseCSV_to_ints(Parameters.get("Password", ""))
         self.hum_idxs = parseCSV_to_ints(Parameters.get("Mode1", ""))
-        self.hum_offsets = parseCSV_to_floats(Parameters.get("Mode2", ""))
 
         try:
             self.relay_idx = int(float(Parameters.get("Mode3", 0))) or None
@@ -187,13 +181,12 @@ class BasePlugin:
         for u in created:
             if u in Devices:
                 if u in (1, 4, 5, 6):  # Temp+Humidity -> format "t;h;status"
-                    self.updateDeviceIfChanged(u, 0, "0;0;0")
+                    Devices[u].Update(nValue=0, sValue="0;0;0")
                 elif u == 2:  # texte
-                    self.updateDeviceIfChanged(u, 0, "")
+                    Devices[u].Update(nValue=0, sValue="")
                 elif u == 3:  # selector (Auto par défaut)
-                    self.updateDeviceIfChanged(u, 1, "10")
+                    Devices[u].Update(nValue=1, sValue="10")
 
-        # Si le sélecteur existe déjà mais a une valeur vide/invalide, on le remet en Auto
         if 3 in Devices and Devices[3].sValue not in ("10", "20", "30"):
             self.updateDeviceIfChanged(3, 1, "10")
 
@@ -313,12 +306,8 @@ class BasePlugin:
                 if self.debug and ((T_int is None) or (RH_int is None)):
                     Domoticz.Debug("--------------DEBUG : Device 4: valeurs manquantes -> 0;0;0")
 
-        # --- Update Device 5: Temp+Hum moyenne "ALL" (normal + wet) avec offsets des wet ---
+        # --- Update Device 5: Temp+Hum moyenne "ALL" (normal + wet) sans offsets ---
         if 5 in Devices:
-            # table des offsets par idx (pour RH des sondes humides)
-            off_map = {idx: (self.hum_offsets[i] if i < len(self.hum_offsets) else 0.0)
-                       for i, idx in enumerate(self.hum_idxs)}
-
             all_idxs = (self.indoor_idxs or []) + (self.hum_idxs or [])
             Ts_all, RHs_all = [], []
 
@@ -343,7 +332,7 @@ class BasePlugin:
                 if t is not None:
                     Ts_all.append(t)
 
-                # Hum (avec offset si sonde humide)
+                # Humidité brute sans offset
                 h = None
                 if 'Humidity' in dev:
                     try:
@@ -357,7 +346,7 @@ class BasePlugin:
                     except Exception:
                         h = None
                 if h is not None:
-                    h = max(0.0, min(100.0, h + off_map.get(idx, 0.0)))  # applique offset si idx humide
+                    h = max(0.0, min(100.0, h))
                     RHs_all.append(h)
 
         # --- Update Device 6: Avg Outdoor Temp+Hum ---
@@ -515,13 +504,12 @@ class BasePlugin:
         else:
             txt = f"{mode_label}{timer_tag} — Boost {'ON' if target_on else 'OFF'}"
 
-        self.updateDeviceIfChanged(2, 0, txt)
+        Devices[2].Update(nValue=0, sValue=txt)
 
-        # log debug
-        if self.debug:
-            Domoticz.Debug(
-                f"--------------DEBUG : {mode_label}{(' ' + timer_tag) if timer_tag else ''} | "
-                f"Boost → {'ON' if target_on else 'OFF' if target_on is False else 'HOLD'}"
+        # log debug 
+        Domoticz.Debug(
+            f"--------------DEBUG : {mode_label}{(' ' + timer_tag) if timer_tag else ''} | "
+            f"Boost → {'ON' if target_on else 'OFF' if target_on is False else 'HOLD'}"
             )
 
     # -------------- Mesures --------------
@@ -545,8 +533,7 @@ class BasePlugin:
                 except Exception:
                     val = None
             if val is not None:
-                off = self.hum_offsets[i] if i < len(self.hum_offsets) else 0.0
-                vals.append(val + off)
+                vals.append(max(0.0, min(100.0, val)))
         return vals if vals else []
 
     def get_hum_status(self, hum_int):
@@ -571,9 +558,10 @@ class BasePlugin:
 
         # 1) Lire l’état actuel du relais
         cur_state = None
-        d = self.get_device_by_idx(self.relay_idx)
+        dev = DomoticzAPI(f"type=command&param=getdevices&rid={self.relay_idx}")
         try:
-            if d:
+            if dev and 'result' in dev and len(dev['result']) > 0:
+                d = dev['result'][0]
                 # Cas standard: champ "Status" vaut "On"/"Off"
                 cur_state = (d.get('Status') or '').strip()
                 if not cur_state:
@@ -606,7 +594,7 @@ class BasePlugin:
             Domoticz.Error(f"Relay command failure (idx {self.relay_idx}, cmd {cmd})")
             return False
 
-        # Met à jour le cache de cycle pour éviter une relecture immédiate
+        # met à jour le cache du cycle si le relais y figure déjà
         if self.relay_idx in self._cycle_device_cache and self._cycle_device_cache[self.relay_idx]:
             self._cycle_device_cache[self.relay_idx]['Status'] = desired
             self._cycle_device_cache[self.relay_idx]['Data'] = desired
@@ -734,9 +722,8 @@ def compute_room_td_list(self):
                 Domoticz.Debug(f"--------------DEBUG : ΔTd: idx={idx} RH=NA (pas de valeur) – ignoré")
             continue
 
-        # --- OFFSET + clamp ---
-        off = self.hum_offsets[i] if i < len(self.hum_offsets) else 0.0
-        RH = max(0.0, min(100.0, RH + off))
+        # --- Clamp sans offset ---
+        RH = max(0.0, min(100.0, RH))
 
         # --- Temp de la sonde (si dispo), sinon T_int ---
         T_room = None
@@ -845,4 +832,5 @@ def onHeartbeat():
     _plugin.onHeartbeat()
 
 # End--------------------------------------------------------------- ---------------------------------------------------
+
 
