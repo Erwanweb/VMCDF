@@ -7,6 +7,7 @@
 # Version:    1.0.1: beta...
 # Version:    1.0.2: first valid...
 # Version:    1.0.3: Logique unifiée ΔTd + High/Low (réf = moyenne Td_ext/Td_int_normale) ...
+# Version:    1.0.4: optim update devices ...
 
 
 """
@@ -91,7 +92,23 @@ class BasePlugin:
         # Paramètres internes
         self._ext_offset = 2.0  # fallback HUMIDE : RH_ext + 2 %
 
+        # Optimisations anti-spam / cache
+        self._cycle_device_cache = {}
+        self._last_info_text = None
+
     # -------------- Life cycle --------------
+
+    def _start_refresh_cycle(self):
+        self._cycle_device_cache = {}
+
+    def updateDeviceIfChanged(self, Unit, nValue, sValue):
+        if Unit not in Devices:
+            return False
+        sValue = str(sValue)
+        if Devices[Unit].nValue != nValue or Devices[Unit].sValue != sValue:
+            Devices[Unit].Update(nValue=nValue, sValue=sValue)
+            return True
+        return False
 
     def onStart(self):
         Domoticz.Log("onStart called")
@@ -167,14 +184,18 @@ class BasePlugin:
             Domoticz.Device(Unit=6, Name="Avg Outdoor", Type=82, Subtype=1, Used=1).Create()
             created.append(6)
 
-        for u in (1, 2, 3, 4, 5, 6):
+        for u in created:
             if u in Devices:
                 if u in (1, 4, 5, 6):  # Temp+Humidity -> format "t;h;status"
-                    Devices[u].Update(nValue=0, sValue="0;0;0")
+                    self.updateDeviceIfChanged(u, 0, "0;0;0")
                 elif u == 2:  # texte
-                    Devices[u].Update(nValue=0, sValue="")
+                    self.updateDeviceIfChanged(u, 0, "")
                 elif u == 3:  # selector (Auto par défaut)
-                    Devices[u].Update(nValue=1, sValue="10")
+                    self.updateDeviceIfChanged(u, 1, "10")
+
+        # Si le sélecteur existe déjà mais a une valeur vide/invalide, on le remet en Auto
+        if 3 in Devices and Devices[3].sValue not in ("10", "20", "30"):
+            self.updateDeviceIfChanged(3, 1, "10")
 
         # Set domoticz heartbeat to x s between 5 to 20 max
         Domoticz.Heartbeat(20)
@@ -207,7 +228,7 @@ class BasePlugin:
         if lvl == 10:  # Auto
             self.force_mode = False
             self.TimerOn = False
-            Devices[3].Update(nValue=1, sValue="10")
+            self.updateDeviceIfChanged(3, 1, "10")
 
         elif lvl == 20:  # Timer
             self.force_mode = True
@@ -216,23 +237,24 @@ class BasePlugin:
             # Assure-toi que self.Timer (minutes) est défini quelque part (ex: 15)
             if not hasattr(self, "Timer"):
                 self.Timer = 30
-            Devices[3].Update(nValue=1, sValue="20")
+            self.updateDeviceIfChanged(3, 1, "20")
 
         elif lvl == 30:  # Forced
             self.force_mode = True
             self.TimerOn = False
-            Devices[3].Update(nValue=1, sValue="30")
+            self.updateDeviceIfChanged(3, 1, "30")
 
         else:  # Valeur inattendue → Auto
             self.force_mode = False
             self.TimerOn = False
-            Devices[3].Update(nValue=1, sValue="10")
+            self.updateDeviceIfChanged(3, 1, "10")
 
         # Appliquer immédiatement
         self.apply_control()
 
     def onHeartbeat(self):
-        Domoticz.Debug("--------------DEBUG : onHeartbeat called")
+        if self.debug:
+            Domoticz.Debug("--------------DEBUG : onHeartbeat called")
 
         now = datetime.now()
 
@@ -243,7 +265,7 @@ class BasePlugin:
             if self.TimerStartedTime  + timedelta(minutes=self.Timer) <= now :
                 self.force_mode = False
                 self.TimerOn = False
-                Devices[3].Update(nValue=1, sValue="10")
+                self.updateDeviceIfChanged(3, 1, "10")
 
         # refresh values and act
         self.refresh_and_act()
@@ -252,6 +274,7 @@ class BasePlugin:
 
     # -------------- Main Logic --------------
     def refresh_and_act(self):
+        self._start_refresh_cycle()
         hum_vals = self.compute_hum_values()
         self.last_values['hum_list'] = hum_vals
         avg_hum = sum(hum_vals) / len(hum_vals) if hum_vals else None
@@ -272,9 +295,9 @@ class BasePlugin:
                 t_val = round(float(T_wet), 1)
                 h_val = int(round(float(avg_hum)))
                 status = self.get_hum_status(h_val)
-                Devices[1].Update(nValue=0, sValue=f"{t_val:.1f};{h_val};{status}")
+                self.updateDeviceIfChanged(1, 0, f"{t_val:.1f};{h_val};{status}")
             else:
-                Devices[1].Update(nValue=0, sValue="0;0;0")
+                self.updateDeviceIfChanged(1, 0, "0;0;0")
                 if self.debug and ((T_wet is None) or (avg_hum is None)):
                     Domoticz.Debug("--------------DEBUG : Device 1: valeurs manquantes -> 0;0;0")
 
@@ -284,9 +307,9 @@ class BasePlugin:
                 t_val = round(float(T_int), 1)
                 h_val = int(round(float(RH_int)))
                 status = self.get_hum_status(h_val)
-                Devices[4].Update(nValue=0, sValue=f"{t_val:.1f};{h_val};{status}")
+                self.updateDeviceIfChanged(4, 0, f"{t_val:.1f};{h_val};{status}")
             else:
-                Devices[4].Update(nValue=0, sValue="0;0;0")
+                self.updateDeviceIfChanged(4, 0, "0;0;0")
                 if self.debug and ((T_int is None) or (RH_int is None)):
                     Domoticz.Debug("--------------DEBUG : Device 4: valeurs manquantes -> 0;0;0")
 
@@ -343,9 +366,9 @@ class BasePlugin:
                 t_val = round(float(T_ext), 1)
                 h_val = int(round(float(RH_ext)))
                 status = self.get_hum_status(h_val)  # 0..3, réutilise ta fonction
-                Devices[6].Update(nValue=0, sValue=f"{t_val:.1f};{h_val};{status}")
+                self.updateDeviceIfChanged(6, 0, f"{t_val:.1f};{h_val};{status}")
             else:
-                Devices[6].Update(nValue=0, sValue="0;0;0")
+                self.updateDeviceIfChanged(6, 0, "0;0;0")
                 if self.debug:
                     Domoticz.Debug("--------------DEBUG : Outdoor: valeurs manquantes -> 0;0;0")
 
@@ -356,10 +379,10 @@ class BasePlugin:
             t_val = round(float(T_all), 1)
             h_val = int(round(float(RH_all)))
             status = self.get_hum_status(h_val)
-            Devices[5].Update(nValue=0, sValue=f"{t_val:.1f};{h_val};{status}")
+            self.updateDeviceIfChanged(5, 0, f"{t_val:.1f};{h_val};{status}")
 
         else:
-            Devices[5].Update(nValue=0, sValue="0;0;0")
+            self.updateDeviceIfChanged(5, 0, "0;0;0")
             if self.debug:
                 Domoticz.Debug("--------------DEBUG : Device 5 ALL: valeurs manquantes -> 0;0;0")
 
@@ -492,12 +515,13 @@ class BasePlugin:
         else:
             txt = f"{mode_label}{timer_tag} — Boost {'ON' if target_on else 'OFF'}"
 
-        Devices[2].Update(nValue=0, sValue=txt)
+        self.updateDeviceIfChanged(2, 0, txt)
 
-        # log debug 
-        Domoticz.Debug(
-            f"--------------DEBUG : {mode_label}{(' ' + timer_tag) if timer_tag else ''} | "
-            f"Boost → {'ON' if target_on else 'OFF' if target_on is False else 'HOLD'}"
+        # log debug
+        if self.debug:
+            Domoticz.Debug(
+                f"--------------DEBUG : {mode_label}{(' ' + timer_tag) if timer_tag else ''} | "
+                f"Boost → {'ON' if target_on else 'OFF' if target_on is False else 'HOLD'}"
             )
 
     # -------------- Mesures --------------
@@ -547,10 +571,9 @@ class BasePlugin:
 
         # 1) Lire l’état actuel du relais
         cur_state = None
-        dev = DomoticzAPI(f"type=command&param=getdevices&rid={self.relay_idx}")
+        d = self.get_device_by_idx(self.relay_idx)
         try:
-            if dev and 'result' in dev and len(dev['result']) > 0:
-                d = dev['result'][0]
+            if d:
                 # Cas standard: champ "Status" vaut "On"/"Off"
                 cur_state = (d.get('Status') or '').strip()
                 if not cur_state:
@@ -583,6 +606,12 @@ class BasePlugin:
             Domoticz.Error(f"Relay command failure (idx {self.relay_idx}, cmd {cmd})")
             return False
 
+        # Met à jour le cache de cycle pour éviter une relecture immédiate
+        if self.relay_idx in self._cycle_device_cache and self._cycle_device_cache[self.relay_idx]:
+            self._cycle_device_cache[self.relay_idx]['Status'] = desired
+            self._cycle_device_cache[self.relay_idx]['Data'] = desired
+            self._cycle_device_cache[self.relay_idx]['nValue'] = 1 if desired == 'On' else 0
+
         if self.debug:
             Domoticz.Debug(f"--------------DEBUG : Relay idx {self.relay_idx}: sent {cmd} (prev={cur_state or 'unknown'})")
         return True
@@ -601,10 +630,17 @@ class BasePlugin:
 
     # -------------- get_device_by_idx --------------
     def get_device_by_idx(self, idx):
+        if idx in self._cycle_device_cache:
+            return self._cycle_device_cache[idx]
+
         res = DomoticzAPI(f"type=command&param=getdevices&rid={idx}")
         if res and 'result' in res and len(res['result']) > 0:
-            return res['result'][0]
+            dev = res['result'][0]
+            self._cycle_device_cache[idx] = dev
+            return dev
+
         Domoticz.Error(f"Device idx {idx} introuvable")
+        self._cycle_device_cache[idx] = None
         return None
 
     # -------------- Write Log --------------
@@ -809,3 +845,4 @@ def onHeartbeat():
     _plugin.onHeartbeat()
 
 # End--------------------------------------------------------------- ---------------------------------------------------
+
